@@ -2,6 +2,7 @@
 #include <thread>
 #include <vector>
 #include <WinSock2.h>
+#include "../Protocol.h"
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -11,13 +12,35 @@ const int PORT = 8080;
 
 void ClientThread(SOCKET clientSocket)
 {
-	cout << "[Client thread] New client has been connected! Processing...\n";
+	cout << "[Client thread] New client has been connected! Waiting for commands...\n";
 
-	// TODO:
-	//			receive commands from client
-	//			decode Protocol.h
-	//			Launch task processing for matrix calculations
-	//			send result
+	MessageHeader header;
+
+	int bytesReceived = recv(clientSocket, (char*)&header, sizeof(MessageHeader), 0);
+
+	if (bytesReceived == sizeof(MessageHeader)) {
+		uint32_t payloadLength = ntohl(header.length);
+
+		if (header.tag == CMD_SEND_CONFIG) {
+			cout << "[Client Thread] Received command CMD_SEND_CONFIG. Length: " << payloadLength << " bytes.\n";
+
+			ConfigPayload config;
+			recv(clientSocket, (char*)&config, payloadLength, 0);
+
+			uint32_t N = ntohl(config.matrix_size);
+			uint32_t threads = ntohl(config.thread_count);
+
+			std::cout << "[Client Thread] Configuration has been read successfully! N=" << N << ", Threads=" << threads << "\n";
+
+			MessageHeader ackHeader;
+			ackHeader.tag = RESP_ACK;
+			ackHeader.length = htonl(1);
+			uint8_t status = 0;
+
+			send(clientSocket, (char*)&ackHeader, sizeof(MessageHeader), 0);
+			send(clientSocket, (char*)&status, 1, 0);
+		}
+	}
 
 	closesocket(clientSocket);
 	cout << "[Client thread] Connection has been closed!\n";
