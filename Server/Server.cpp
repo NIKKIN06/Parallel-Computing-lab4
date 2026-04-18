@@ -12,9 +12,10 @@ const int PORT = 8080;
 
 void ClientThread(SOCKET clientSocket)
 {
-	cout << "[Client thread] New client has been connected! Waiting for commands...\n";
+	cout << "[Client thread] New client has been connected! Waiting for commands...\n\n";
 
 	MessageHeader header;
+	uint32_t N = 0, threads = 0;
 
 	int bytesReceived = recv(clientSocket, (char*)&header, sizeof(MessageHeader), 0);
 
@@ -27,10 +28,10 @@ void ClientThread(SOCKET clientSocket)
 			ConfigPayload config;
 			recv(clientSocket, (char*)&config, payloadLength, 0);
 
-			uint32_t N = ntohl(config.matrix_size);
-			uint32_t threads = ntohl(config.thread_count);
+			N = ntohl(config.matrix_size);
+			threads = ntohl(config.thread_count);
 
-			std::cout << "[Client Thread] Configuration has been read successfully! N=" << N << ", Threads=" << threads << "\n";
+			cout << "[Client Thread] Configuration has been read successfully! N=" << N << ", Threads=" << threads << "\n\n";
 
 			MessageHeader ackHeader;
 			ackHeader.tag = RESP_ACK;
@@ -39,6 +40,59 @@ void ClientThread(SOCKET clientSocket)
 
 			send(clientSocket, (char*)&ackHeader, sizeof(MessageHeader), 0);
 			send(clientSocket, (char*)&status, 1, 0);
+		}
+		
+		bytesReceived = recv(clientSocket, (char*)&header, sizeof(MessageHeader), 0);
+
+		if (bytesReceived == sizeof(MessageHeader) && header.tag == CMD_SEND_DATA)
+		{
+			uint32_t matrixDataLength = ntohl(header.length);
+			cout << "[Client Thread] Received command CMD_SEND_DATA. Waiting for bytes: " << matrixDataLength << "\n";
+
+			if (N != 0 && threads != 0)
+			{
+				vector<uint32_t> networkMatrix(N * N);
+				char* buffer = (char*)networkMatrix.data();
+
+				uint32_t totalReceived = 0;
+				while (totalReceived < matrixDataLength)
+				{
+					int bytes = recv(clientSocket, buffer + totalReceived, matrixDataLength - totalReceived, 0);
+
+					if (bytes <= 0)
+					{
+						cerr << "[Client Thread] Error or disconnect occurred during data transmission.\n";
+						break;
+					}
+
+					totalReceived += bytes;
+				}
+
+				if (totalReceived == matrixDataLength)
+				{
+					vector<int> hostMatrix(N * N);
+					for (uint32_t i = 0; i < N * N; ++i)
+					{
+						hostMatrix[i] = ntohl(networkMatrix[i]);
+						cout << hostMatrix[i];
+						cout << (((i + 1) % N == 0) ? "\n" : " ");
+					}
+
+					cout << "[Client Thread] Matrix was received and decoded successfully!\n\n";
+
+					MessageHeader dataAckHeader;
+					dataAckHeader.tag = RESP_ACK;
+					dataAckHeader.length = htonl(1);
+					uint8_t status = 0;
+
+					send(clientSocket, (char*)&dataAckHeader, sizeof(MessageHeader), 0);
+					send(clientSocket, (char*)&status, 1, 0);
+				}
+			}
+			else
+			{
+				cerr << "Firstly, Client have to send configuration data (N & threads)!\n\n";
+			}
 		}
 	}
 

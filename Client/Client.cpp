@@ -37,7 +37,7 @@ int main()
         return 1;
     }
 
-    std::cout << "Trying to connect to the server " << SERVER_IP << ":" << PORT << "...\n";
+    cout << "Trying to connect to the server " << SERVER_IP << ":" << PORT << "...\n";
 
     if (connect(clientSocket, (sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
         cerr << "Unable to connect to the server! ERROR: " << WSAGetLastError() << "\n";
@@ -46,7 +46,7 @@ int main()
         return 1;
     }
 
-    std::cout << "Successfully connected to the server!\n";
+    cout << "Successfully connected to the server!\n\n";
 
     ConfigPayload configuration;
     uint32_t N = 10;
@@ -74,15 +74,47 @@ int main()
 
         if (status == 0)
         {
-            cout << "Server has received configuration successfully!\n";
+            cout << "Server has received configuration successfully!\n\n";
+        }
+
+        cout << "Generating matrix " << N << "x" << N << "...\n";
+        vector<int> matrix(N * N);
+
+        for (uint32_t i = 0; i < N * N; i++)
+        {
+            matrix[i] = rand() % 100;
+            cout << matrix[i];
+            cout << (((i + 1) % N == 0) ? "\n" : " ");
+        }
+
+        vector<uint32_t> networkMatrix(N * N);
+        for (uint32_t i = 0; i < N * N; ++i)
+        {
+            networkMatrix[i] = htonl(matrix[i]);
+        }
+
+        MessageHeader dataHeader;
+        dataHeader.tag = CMD_SEND_DATA;
+        dataHeader.length = htonl(N * N * sizeof(uint32_t));
+
+        cout << "Matrix sending...\n";
+        
+        send(clientSocket, (char*)&dataHeader, sizeof(MessageHeader), 0);
+        send(clientSocket, (char*)networkMatrix.data(), N * N * sizeof(uint32_t), 0);
+
+        int dataBytesReceived = recv(clientSocket, (char*)&responseHeader, sizeof(MessageHeader), 0);
+
+        if (dataBytesReceived > 0 && responseHeader.tag == RESP_ACK)
+        {
+            uint8_t status;
+            recv(clientSocket, (char*)&status, 1, 0);
+
+            if (status == 0)
+            {
+                cout << "Server has received matrix successfully!\n\n";
+            }
         }
     }
-
-    // TODO: 
-    //      Generate matrix
-    //      send configuration (0x01)
-    //      send data (0x02)
-    //      send start command (0x03) and wait for result (0x04)
 
     system("pause");
 
