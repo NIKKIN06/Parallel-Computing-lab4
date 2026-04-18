@@ -2,6 +2,8 @@
 #include <thread>
 #include <vector>
 #include <WinSock2.h>
+#include <algorithm>
+#include <atomic>
 #include "../Protocol.h"
 
 #pragma comment(lib, "ws2_32.lib")
@@ -10,67 +12,114 @@ using namespace std;
 
 const int PORT = 8080;
 
+void MirrorMatrix(vector<int>& matrix, uint32_t N, uint32_t startRow, uint32_t endRow)
+{
+	for (uint32_t i = startRow; i < endRow; ++i)
+	{
+		uint32_t mirrorRow = N - 1 - i;
+
+		for (uint32_t j = 0; j < N; ++j)
+		{
+			matrix[mirrorRow * N + j] = matrix[i * N + j];
+		}
+	}
+}
+
+enum class TaskState
+{
+	IDLE,
+	PROCESSING,
+	READY
+};
+
+void ParalellThreads(vector<int>& matrix, uint32_t N, uint32_t threadsCount)
+{
+	uint32_t halfRows = N / 2;
+	if (halfRows == 0 || threadsCount == 0) return;
+
+	uint32_t threads = min(threadsCount, halfRows);
+
+	uint32_t rowsPerThread = halfRows / threads;
+	uint32_t remainderRows = halfRows % threads;
+
+	vector<thread> workers;
+	uint32_t currentRow = 0;
+
+	for (uint32_t t = 0; t < threads; ++t)
+	{
+		uint32_t extraRow = (remainderRows > 0) ? 1 : 0;
+		uint32_t currentThreadRows = rowsPerThread + extraRow;
+
+		uint32_t startRow = currentRow;
+		uint32_t endRow = startRow + currentThreadRows;
+
+		workers.emplace_back(MirrorMatrix, std::ref(matrix), N, startRow, endRow);
+
+		currentRow = endRow;
+		if (remainderRows > 0) remainderRows--;
+	}
+	
+	for (auto& worker : workers)
+	{
+		if (worker.joinable())
+		{
+			worker.join();
+		}
+	}
+}
+
 void ClientThread(SOCKET clientSocket)
 {
 	cout << "[Client thread] New client has been connected! Waiting for commands...\n\n";
 
-	MessageHeader header;
-	uint32_t N = 0, threads = 0;
+	uint32_t N = 0, threadsCount = 0;
+	vector<int> hostMatrix;
 
-	int bytesReceived = recv(clientSocket, (char*)&header, sizeof(MessageHeader), 0);
+	atomic<TaskState> taskState{ TaskState::IDLE };
 
-	if (bytesReceived == sizeof(MessageHeader)) {
+	while (true)
+	{
+		MessageHeader header;
+		int bytesReceived = recv(clientSocket, (char*)&header, sizeof(MessageHeader), 0);
+
+		if (bytesReceived <= 0) break;
+
 		uint32_t payloadLength = ntohl(header.length);
 
-		if (header.tag == CMD_SEND_CONFIG) {
-			cout << "[Client Thread] Received command CMD_SEND_CONFIG. Length: " << payloadLength << " bytes.\n";
-
+		if (header.tag == CMD_SEND_CONFIG)
+		{
 			ConfigPayload config;
 			recv(clientSocket, (char*)&config, payloadLength, 0);
 
 			N = ntohl(config.matrix_size);
-			threads = ntohl(config.thread_count);
+			threadsCount = ntohl(config.thread_count);
 
-			cout << "[Client Thread] Configuration has been read successfully! N=" << N << ", Threads=" << threads << "\n\n";
+			cout << "[Client Thread] Configuration read! N=" << N << ", Threads=" << threadsCount << "\n\n";
 
-			MessageHeader ackHeader;
-			ackHeader.tag = RESP_ACK;
-			ackHeader.length = htonl(1);
+			MessageHeader ackHeader = { RESP_ACK, htonl(1) };
 			uint8_t status = 0;
-
 			send(clientSocket, (char*)&ackHeader, sizeof(MessageHeader), 0);
 			send(clientSocket, (char*)&status, 1, 0);
 		}
 		
-		bytesReceived = recv(clientSocket, (char*)&header, sizeof(MessageHeader), 0);
-
-		if (bytesReceived == sizeof(MessageHeader) && header.tag == CMD_SEND_DATA)
+		else if (header.tag == CMD_SEND_DATA)
 		{
-			uint32_t matrixDataLength = ntohl(header.length);
-			cout << "[Client Thread] Received command CMD_SEND_DATA. Waiting for bytes: " << matrixDataLength << "\n";
-
-			if (N != 0 && threads != 0)
+			if (N != 0 && threadsCount != 0)
 			{
 				vector<uint32_t> networkMatrix(N * N);
 				char* buffer = (char*)networkMatrix.data();
-
 				uint32_t totalReceived = 0;
-				while (totalReceived < matrixDataLength)
+
+				while (totalReceived < payloadLength)
 				{
-					int bytes = recv(clientSocket, buffer + totalReceived, matrixDataLength - totalReceived, 0);
-
-					if (bytes <= 0)
-					{
-						cerr << "[Client Thread] Error or disconnect occurred during data transmission.\n";
-						break;
-					}
-
+					int bytes = recv(clientSocket, buffer + totalReceived, payloadLength - totalReceived, 0);
+					if (bytes <= 0) break;
 					totalReceived += bytes;
 				}
 
-				if (totalReceived == matrixDataLength)
+				if (totalReceived == payloadLength)
 				{
-					vector<int> hostMatrix(N * N);
+					hostMatrix.resize(N * N);
 					for (uint32_t i = 0; i < N * N; ++i)
 					{
 						hostMatrix[i] = ntohl(networkMatrix[i]);
@@ -80,18 +129,58 @@ void ClientThread(SOCKET clientSocket)
 
 					cout << "[Client Thread] Matrix was received and decoded successfully!\n\n";
 
-					MessageHeader dataAckHeader;
-					dataAckHeader.tag = RESP_ACK;
-					dataAckHeader.length = htonl(1);
+					MessageHeader dataAckHeader = { RESP_ACK, htonl(1) };
 					uint8_t status = 0;
-
 					send(clientSocket, (char*)&dataAckHeader, sizeof(MessageHeader), 0);
 					send(clientSocket, (char*)&status, 1, 0);
 				}
 			}
-			else
+		}
+		
+		else if (header.tag == CMD_START)
+		{
+			cout << "[Client Thread] CMD_START received. Launching task processing thread...\n\n";
+
+			taskState = TaskState::PROCESSING;
+
+			thread([&hostMatrix, N, threadsCount, &taskState]()
+				{
+					ParalellThreads(hostMatrix, N, threadsCount);
+					taskState = TaskState::READY;
+				}).detach();
+
+			MessageHeader startAck = { RESP_STARTED, htonl(0) };
+			send(clientSocket, (char*)&startAck, sizeof(MessageHeader), 0);
+		}
+		
+		else if (header.tag == CMD_GET_STATUS)
+		{
+			TaskState currentState = taskState.load();
+			
+			if (currentState == TaskState::PROCESSING)
 			{
-				cerr << "Firstly, Client have to send configuration data (N & threads)!\n\n";
+				MessageHeader statusAck = { RESP_STATUS, htonl(1) };
+				uint8_t currentStatus = 0;
+				send(clientSocket, (char*)&statusAck, sizeof(MessageHeader), 0);
+				send(clientSocket, (char*)&currentStatus, 1, 0);
+			}
+			else if (currentState == TaskState::READY)
+			{
+				cout << "[Client Thread] Sending result back to client...\n\n";
+
+				vector<uint32_t> networkMatrix(N * N);
+				for (uint32_t i = 0; i < N * N; ++i)
+				{
+					networkMatrix[i] = htonl(hostMatrix[i]);
+					cout << hostMatrix[i];
+					cout << (((i + 1) % N == 0) ? "\n" : " ");
+				}
+
+				MessageHeader resultHeader = { RESP_RESULT, htonl(N * N * sizeof(uint32_t)) };
+				send(clientSocket, (char*)&resultHeader, sizeof(MessageHeader), 0);
+				send(clientSocket, (char*)networkMatrix.data(), N * N * sizeof(uint32_t), 0);
+
+				taskState = TaskState::IDLE;
 			}
 		}
 	}
