@@ -4,6 +4,8 @@
 #include <WinSock2.h>
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <format>
 #include "../Protocol.h"
 
 #pragma comment(lib, "ws2_32.lib")
@@ -11,6 +13,14 @@
 using namespace std;
 
 const int PORT = 8080;
+
+string getCurrentTime()
+{
+	auto now = chrono::current_zone()->to_local(chrono::system_clock::now());
+	string time = format("{:%T}", now);
+
+	return time;
+}
 
 void MirrorMatrix(vector<int>& matrix, uint32_t N, uint32_t startRow, uint32_t endRow)
 {
@@ -34,6 +44,8 @@ enum class TaskState
 
 void ParalellThreads(vector<int>& matrix, uint32_t N, uint32_t threadsCount)
 {
+	cout << "[Task Thread] [" << getCurrentTime() << "] Starting parallel processing with " << threadsCount << " threads...\n";
+	
 	uint32_t halfRows = N / 2;
 	if (halfRows == 0 || threadsCount == 0) return;
 
@@ -66,11 +78,13 @@ void ParalellThreads(vector<int>& matrix, uint32_t N, uint32_t threadsCount)
 			worker.join();
 		}
 	}
+
+	cout << "[Task Thread] [" << getCurrentTime() << "] Parallel processing finished!\n\n";
 }
 
 void ClientThread(SOCKET clientSocket)
 {
-	cout << "[Client thread] New client has been connected! Waiting for commands...\n\n";
+	cout << "[Client Thread] [" << getCurrentTime() << "] New client has been connected! Waiting for commands...\n\n";
 
 	uint32_t N = 0, threadsCount = 0;
 	vector<int> hostMatrix;
@@ -94,7 +108,7 @@ void ClientThread(SOCKET clientSocket)
 			N = ntohl(config.matrix_size);
 			threadsCount = ntohl(config.thread_count);
 
-			cout << "[Client Thread] Configuration read! N=" << N << ", Threads=" << threadsCount << "\n\n";
+			cout << "[Client Thread] [" << getCurrentTime() << "] Configuration read! N=" << N << ", Threads=" << threadsCount << "\n\n";
 
 			MessageHeader ackHeader = { RESP_ACK, htonl(1) };
 			uint8_t status = 0;
@@ -123,11 +137,15 @@ void ClientThread(SOCKET clientSocket)
 					for (uint32_t i = 0; i < N * N; ++i)
 					{
 						hostMatrix[i] = ntohl(networkMatrix[i]);
-						cout << hostMatrix[i];
-						cout << (((i + 1) % N == 0) ? "\n" : " ");
+						
+						if (N <= 10)
+						{
+							cout << hostMatrix[i];
+							cout << (((i + 1) % N == 0) ? "\n" : " ");
+						}
 					}
 
-					cout << "[Client Thread] Matrix was received and decoded successfully!\n\n";
+					cout << "[Client Thread] [" << getCurrentTime() << "] Matrix was received and decoded successfully!\n\n";
 
 					MessageHeader dataAckHeader = { RESP_ACK, htonl(1) };
 					uint8_t status = 0;
@@ -139,7 +157,7 @@ void ClientThread(SOCKET clientSocket)
 		
 		else if (header.tag == CMD_START)
 		{
-			cout << "[Client Thread] CMD_START received. Launching task processing thread...\n\n";
+			cout << "[Client Thread] [" << getCurrentTime() << "] CMD_START received. Launching task processing thread...\n\n";
 
 			taskState = TaskState::PROCESSING;
 
@@ -166,14 +184,18 @@ void ClientThread(SOCKET clientSocket)
 			}
 			else if (currentState == TaskState::READY)
 			{
-				cout << "[Client Thread] Sending result back to client...\n\n";
+				cout << "[Client Thread] [" << getCurrentTime() << "] Sending result back to client...\n";
 
 				vector<uint32_t> networkMatrix(N * N);
 				for (uint32_t i = 0; i < N * N; ++i)
 				{
 					networkMatrix[i] = htonl(hostMatrix[i]);
-					cout << hostMatrix[i];
-					cout << (((i + 1) % N == 0) ? "\n" : " ");
+					
+					if (N <= 10)
+					{
+						cout << hostMatrix[i];
+						cout << (((i + 1) % N == 0) ? "\n" : " ");
+					}
 				}
 
 				MessageHeader resultHeader = { RESP_RESULT, htonl(N * N * sizeof(uint32_t)) };
@@ -181,12 +203,14 @@ void ClientThread(SOCKET clientSocket)
 				send(clientSocket, (char*)networkMatrix.data(), N * N * sizeof(uint32_t), 0);
 
 				taskState = TaskState::IDLE;
+
+				cout << "[Client Thread] [" << getCurrentTime() << "] All data has been sent!\n\n";
 			}
 		}
 	}
 
 	closesocket(clientSocket);
-	cout << "[Client thread] Connection has been closed!\n";
+	cout << "[Client Thread] [" << getCurrentTime() << "] Connection has been closed!\n";
 }
 
 int main()
@@ -194,14 +218,14 @@ int main()
 	WSADATA wsaData;
 	if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
 	{
-		cerr << "WinSock initialization ERROR!\n";
+		cerr << "[Main Thread] [" << getCurrentTime() << "] WinSock initialization ERROR!\n";
 		return 1;
 	}
 
 	SOCKET serverSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (serverSocket == INVALID_SOCKET)
 	{
-		cerr << "Socket creation ERROR!\n";
+		cerr << "[Main Thread] [" << getCurrentTime() << "] Socket creation ERROR!\n";
 		WSACleanup();
 		return 1;
 	}
@@ -213,7 +237,7 @@ int main()
 
 	if (bind(serverSocket, (sockaddr*)&serverAddress, sizeof(serverAddress)) == SOCKET_ERROR)
 	{
-		cerr << "Bind ERROR: " << WSAGetLastError() << "\n";
+		cerr << "[Main Thread] [" << getCurrentTime() << "] Bind ERROR: " << WSAGetLastError() << "\n";
 		closesocket(serverSocket);
 		WSACleanup();
 		return 1;
@@ -221,13 +245,13 @@ int main()
 
 	if (listen(serverSocket, SOMAXCONN) == SOCKET_ERROR)
 	{
-		cerr << "Listen ERROR: " << WSAGetLastError() << "\n";
+		cerr << "[Main Thread] [" << getCurrentTime() << "] Listen ERROR: " << WSAGetLastError() << "\n";
 		closesocket(serverSocket);
 		WSACleanup();
 		return 1;
 	}
 
-	cout << "Server has been launched! Waiting for connections on PORT " << PORT << "...\n";
+	cout << "[Main Thread] [" << getCurrentTime() << "] Server has been launched! Waiting for connections on PORT " << PORT << "...\n\n";
 
 	vector<thread> clientThreads;
 
@@ -240,7 +264,7 @@ int main()
 
 		if (clientSocket == INVALID_SOCKET)
 		{
-			cerr << "Accept ERROR: " << WSAGetLastError() << "\n";
+			cerr << "[Main Thread] [" << getCurrentTime() << "] Accept ERROR: " << WSAGetLastError() << "\n";
 			continue;
 		}
 

@@ -1,8 +1,11 @@
 #include <iostream>
+#include <cstdlib>
+#include <ctime>
 #include <vector>
 #include <winsock2.h>
 #include <WS2tcpip.h>
 #include <chrono>
+#include <format>
 #include <thread>
 #include "../Protocol.h"
 
@@ -13,19 +16,29 @@ using namespace std;
 const int PORT = 8080;
 const char* SERVER_IP = "127.0.0.1";
 
+string getCurrentTime()
+{
+    auto now = chrono::current_zone()->to_local(chrono::system_clock::now());
+    string time = format("{:%T}", now);
+
+    return time;
+}
+
 int main()
 {
+    srand(time(0));
+
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
     {
-        cerr << "WinSock initialization ERROR!\n";
+        cerr << "[Client] [" << getCurrentTime() << "] WinSock initialization ERROR!\n";
         return 1;
     }
 
     SOCKET clientSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (clientSocket == INVALID_SOCKET)
     {
-        cerr << "Socket creation ERROR!\n";
+        cerr << "[Client] [" << getCurrentTime() << "] Socket creation ERROR!\n";
         WSACleanup();
         return 1;
     }
@@ -36,27 +49,27 @@ int main()
 
     if (inet_pton(AF_INET, SERVER_IP, &serverAddr.sin_addr) <= 0)
     {
-        cerr << "IP address is not valid!\n";
+        cerr << "[Client] [" << getCurrentTime() << "] IP address is not valid!\n";
         closesocket(clientSocket);
         WSACleanup();
         return 1;
     }
 
-    cout << "Trying to connect to the server " << SERVER_IP << ":" << PORT << "...\n";
+    cout << "[Client] [" << getCurrentTime() << "] Trying to connect to the server " << SERVER_IP << ":" << PORT << "...\n";
 
     if (connect(clientSocket, (sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR)
     {
-        cerr << "Unable to connect to the server! ERROR: " << WSAGetLastError() << "\n";
+        cerr << "[Client] [" << getCurrentTime() << "] Unable to connect to the server! ERROR: " << WSAGetLastError() << "\n";
         closesocket(clientSocket);
         WSACleanup();
         return 1;
     }
 
-    cout << "Successfully connected to the server!\n\n";
+    cout << "[Client] [" << getCurrentTime() << "] Successfully connected to the server!\n\n";
 
     ConfigPayload configuration;
-    uint32_t N = 10;
-    uint32_t threads = 4;
+    uint32_t N = 20000;
+    uint32_t threads = 2;
 
     configuration.matrix_size = htonl(N);
     configuration.thread_count = htonl(threads);
@@ -65,7 +78,7 @@ int main()
     header.tag = CMD_SEND_CONFIG;
     header.length = htonl(sizeof(ConfigPayload));
 
-    cout << "Sending configuration (N=" << N << ", Threads=" << threads << ")...\n";
+    cout << "[Client] [" << getCurrentTime() << "] Sending configuration (N=" << N << ", Threads=" << threads << ")...\n";
 
     send(clientSocket, (char*)&header, sizeof(MessageHeader), 0);
     send(clientSocket, (char*)&configuration, sizeof(ConfigPayload), 0);
@@ -80,17 +93,21 @@ int main()
 
         if (status == 0)
         {
-            cout << "Server has received configuration successfully!\n\n";
+            cout << "[Client] [" << getCurrentTime() << "] Server has received configuration successfully!\n\n";
         }
 
-        cout << "Generating matrix " << N << "x" << N << "...\n";
+        cout << "[Client] [" << getCurrentTime() << "] Generating matrix " << N << "x" << N << "...\n";
         vector<int> matrix(N * N);
 
         for (uint32_t i = 0; i < N * N; i++)
         {
             matrix[i] = rand() % 100;
-            cout << matrix[i];
-            cout << (((i + 1) % N == 0) ? "\n" : " ");
+            
+            if (N <= 10)
+            {
+                cout << matrix[i];
+                cout << (((i + 1) % N == 0) ? "\n" : " ");
+            }
         }
 
         vector<uint32_t> networkMatrix(N * N);
@@ -103,7 +120,7 @@ int main()
         dataHeader.tag = CMD_SEND_DATA;
         dataHeader.length = htonl(N * N * sizeof(uint32_t));
 
-        cout << "Matrix sending...\n";
+        cout << "[Client] [" << getCurrentTime() << "] Matrix sending...\n";
         
         send(clientSocket, (char*)&dataHeader, sizeof(MessageHeader), 0);
         send(clientSocket, (char*)networkMatrix.data(), N * N * sizeof(uint32_t), 0);
@@ -117,7 +134,7 @@ int main()
 
             if (status == 0)
             {
-                cout << "Server has received matrix successfully!\n\n";
+                cout << "[Client] [" << getCurrentTime() << "] Server has received matrix successfully!\n\n";
             }
         }
     }
@@ -126,7 +143,7 @@ int main()
     startHeader.tag = CMD_START;
     startHeader.length = htonl(0);
 
-    cout << "Sending CMD_START to launch processing...\n";
+    cout << "[Client] [" << getCurrentTime() << "] Sending CMD_START to launch processing...\n";
     send(clientSocket, (char*)&startHeader, sizeof(MessageHeader), 0);
 
     MessageHeader startResp;
@@ -134,7 +151,7 @@ int main()
 
     if (startResp.tag == RESP_STARTED)
     {
-        cout << "Server confirmed: The processing has been started!\n\n";
+        cout << "[Client] [" << getCurrentTime() << "] Server confirmed: The processing has been started!\n\n";
     }
 
     bool isDone = false;
@@ -152,7 +169,7 @@ int main()
 
         if (bytesReceived <= 0)
         {
-            cerr << "Connection lost while waiting for status.\n";
+            cerr << "[Client] [" << getCurrentTime() << "] Connection lost while waiting for status.\n";
             break;
         }
 
@@ -161,14 +178,14 @@ int main()
             uint8_t currentStatus;
             recv(clientSocket, (char*)&currentStatus, 1, 0);
 
-            cout << "Current status: in progress. Waiting 10 second...\n";
+            cout << "[Client] [" << getCurrentTime() << "] Current status: in progress. Waiting 0.1 second...\n";
 
-            std::this_thread::sleep_for(std::chrono::seconds(10));
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
         
         else if (statusResp.tag == RESP_RESULT)
         {
-            cout << "\n[Client] Server has finished! Receiving final result...\n";
+            cout << "\n[Client] [" << getCurrentTime() << "] Server has finished! Receiving final result...\n";
 
             uint32_t payloadLength = ntohl(statusResp.length);
 
@@ -187,13 +204,18 @@ int main()
             {
                 vector<int> finalMatrix(N * N);
 
-                cout << "\n<-- Mirrored matrix from Server -->\n\n";
+                cout << "[Client] [" << getCurrentTime() << "] Mirrored matrix has been received from Server successfully!\n";
+                if (N <= 10) cout << "\n\n[Client] [" << getCurrentTime() << "] Mirrored matrix from Server:\n";
 
                 for (uint32_t i = 0; i < N * N; ++i)
                 {
                     finalMatrix[i] = ntohl(networkMatrix[i]);
-                    cout << finalMatrix[i];
-                    cout << (((i + 1) % N == 0) ? "\n" : " ");
+                    
+                    if (N <= 10)
+                    {
+                        cout << finalMatrix[i];
+                        cout << (((i + 1) % N == 0) ? "\n" : " ");
+                    }
                 }
                 cout << "\n";
             }
