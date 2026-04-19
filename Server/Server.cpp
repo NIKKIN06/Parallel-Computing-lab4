@@ -2,6 +2,7 @@
 #include <thread>
 #include <vector>
 #include <WinSock2.h>
+#include <WS2tcpip.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -82,9 +83,9 @@ void ParalellThreads(vector<int>& matrix, uint32_t N, uint32_t threadsCount)
 	cout << "[Task Thread] [" << getCurrentTime() << "] Parallel processing finished!\n\n";
 }
 
-void ClientThread(SOCKET clientSocket)
+void ClientThread(SOCKET clientSocket, int clientId)
 {
-	cout << "[Client Thread] [" << getCurrentTime() << "] New client has been connected! Waiting for commands...\n\n";
+	cout << "[Client Thread #" << clientId << "] [" << getCurrentTime() << "] New client has been connected! Waiting for commands...\n\n";
 
 	uint32_t N = 0, threadsCount = 0;
 	vector<int> hostMatrix;
@@ -108,7 +109,7 @@ void ClientThread(SOCKET clientSocket)
 			N = ntohl(config.matrix_size);
 			threadsCount = ntohl(config.thread_count);
 
-			cout << "[Client Thread] [" << getCurrentTime() << "] Configuration read! N=" << N << ", Threads=" << threadsCount << "\n\n";
+			cout << "[Client Thread #" << clientId << "] [" << getCurrentTime() << "] Configuration read! N=" << N << ", Threads=" << threadsCount << "\n\n";
 
 			MessageHeader ackHeader = { RESP_ACK, htonl(1) };
 			uint8_t status = 0;
@@ -145,7 +146,7 @@ void ClientThread(SOCKET clientSocket)
 						}
 					}
 
-					cout << "[Client Thread] [" << getCurrentTime() << "] Matrix was received and decoded successfully!\n\n";
+					cout << "[Client Thread #" << clientId << "] [" << getCurrentTime() << "] Matrix was received and decoded successfully!\n\n";
 
 					MessageHeader dataAckHeader = { RESP_ACK, htonl(1) };
 					uint8_t status = 0;
@@ -157,7 +158,7 @@ void ClientThread(SOCKET clientSocket)
 		
 		else if (header.tag == CMD_START)
 		{
-			cout << "[Client Thread] [" << getCurrentTime() << "] CMD_START received. Launching task processing thread...\n\n";
+			cout << "[Client Thread #" << clientId << "] [" << getCurrentTime() << "] CMD_START received. Launching task processing thread...\n\n";
 
 			taskState = TaskState::PROCESSING;
 
@@ -184,7 +185,7 @@ void ClientThread(SOCKET clientSocket)
 			}
 			else if (currentState == TaskState::READY)
 			{
-				cout << "[Client Thread] [" << getCurrentTime() << "] Sending result back to client...\n";
+				cout << "[Client Thread #" << clientId << "] [" << getCurrentTime() << "] Sending result back to client...\n";
 
 				vector<uint32_t> networkMatrix(N * N);
 				for (uint32_t i = 0; i < N * N; ++i)
@@ -204,13 +205,13 @@ void ClientThread(SOCKET clientSocket)
 
 				taskState = TaskState::IDLE;
 
-				cout << "[Client Thread] [" << getCurrentTime() << "] All data has been sent!\n\n";
+				cout << "[Client Thread #" << clientId << "] [" << getCurrentTime() << "] All data has been sent!\n\n";
 			}
 		}
 	}
 
 	closesocket(clientSocket);
-	cout << "[Client Thread] [" << getCurrentTime() << "] Connection has been closed!\n";
+	cout << "[Client Thread #" << clientId << "] [" << getCurrentTime() << "] Connection has been closed!\n";
 }
 
 int main()
@@ -252,8 +253,9 @@ int main()
 	}
 
 	cout << "[Main Thread] [" << getCurrentTime() << "] Server has been launched! Waiting for connections on PORT " << PORT << "...\n\n";
-
+	
 	vector<thread> clientThreads;
+	atomic<int> clientIdCounter{ 1 };
 
 	while (true)
 	{
@@ -268,7 +270,15 @@ int main()
 			continue;
 		}
 
-		clientThreads.emplace_back(thread(ClientThread, clientSocket));
+		int currentClientId = clientIdCounter++;
+
+		char clientIp[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &clientAddress.sin_addr, clientIp, INET_ADDRSTRLEN);
+		int clientPort = ntohs(clientAddress.sin_port);
+
+		cout << "[Main Thread] Accepted connection from IP: " << clientIp << ", Port: " << clientPort << " -> Assigned Client ID: #" << currentClientId << "\n";
+
+		clientThreads.emplace_back(thread(ClientThread, clientSocket, currentClientId));
 
 		clientThreads.back().detach();
 	}

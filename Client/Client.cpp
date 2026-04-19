@@ -68,8 +68,8 @@ int main()
     cout << "[Client] [" << getCurrentTime() << "] Successfully connected to the server!\n\n";
 
     ConfigPayload configuration;
-    uint32_t N = 20000;
-    uint32_t threads = 2;
+    uint32_t N = 10000;
+    uint32_t threads = 8;
 
     configuration.matrix_size = htonl(N);
     configuration.thread_count = htonl(threads);
